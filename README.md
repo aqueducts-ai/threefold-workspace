@@ -1,167 +1,226 @@
-# LLM Workspace
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
+  <img src="https://img.shields.io/badge/tmux-required-green.svg" alt="tmux">
+</p>
 
-Multi-pane tmux workflow for parallel AI-assisted development with Claude Code, Gemini CLI, and more.
+<h1 align="center">LLM Workspace</h1>
+
+<p align="center">
+  <strong>Multi-pane tmux workflow for parallel AI-assisted development</strong>
+</p>
+
+<p align="center">
+  Run multiple Claude Code (or other LLM CLI) sessions side-by-side,<br>
+  each with its own git worktree and dedicated terminal.
+</p>
+
+---
 
 ```
-  ╔═══════════════════════════════════════════════════════════════════════╗
-  ║                                                                       ║
-  ║   ┌─────────────────┬─────────────────┬─────────────────┐            ║
-  ║   │   CLAUDE        │   CLAUDE        │   CLAUDE        │            ║
-  ║   │   (main)        │   (feature)     │   (bugfix)      │            ║
-  ║   │                 │                 │                 │            ║
-  ║   ├─────────────────┼─────────────────┼─────────────────┤            ║
-  ║   │   CLI           │   CLI           │   CLI           │            ║
-  ║   │   (main)        │   (feature)     │   (bugfix)      │            ║
-  ║   ├─────────────────┴─────────────────┴─────────────────┤            ║
-  ║   │                    USAGE MONITOR                    │            ║
-  ║   └─────────────────────────────────────────────────────┘            ║
-  ║                                                                       ║
-  ╚═══════════════════════════════════════════════════════════════════════╝
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│   ┌───────────────────┬───────────────────┬───────────────────┐            │
+│   │                   │                   │                   │            │
+│   │   CLAUDE          │   CLAUDE          │   CLAUDE          │            │
+│   │   feature/auth    │   fix/api-bug     │   main            │            │
+│   │                   │                   │                   │            │
+│   │   "Add OAuth..."  │   "Fix the 500"   │   "Review PR..."  │            │
+│   │                   │                   │                   │            │
+│   ├───────────────────┼───────────────────┼───────────────────┤            │
+│   │ $ npm test        │ $ git status      │ $ npm run build   │            │
+│   │ ✓ 42 passed       │ M  src/api.ts     │ ✓ Build complete  │            │
+│   └───────────────────┴───────────────────┴───────────────────┘            │
+│   ┌─────────────────────────────────────────────────────────────┐          │
+│   │  [OK] Week: 34% | Session: 12% | Time left: 4h 23m          │          │
+│   └─────────────────────────────────────────────────────────────┘          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
 
 ## Why?
 
-Modern AI coding assistants like Claude Code work best when you can maintain context. Git worktrees let you work on multiple branches simultaneously without stashing. Combined with tmux, you get:
+| Problem | Solution |
+|---------|----------|
+| Context-switching between tasks kills productivity | **Parallel panes** - work on 3 things at once |
+| AI assistants lose context when you switch branches | **Git worktrees** - each branch stays checked out |
+| No visibility into token usage | **Live monitor** - see weekly/session limits in real-time |
+| Rebuilding AI context wastes tokens | **Isolated sessions** - each pane keeps its own context |
 
-- **Parallel development**: Work on 3 features/bugs at once
-- **Context isolation**: Each branch has its own Claude session
-- **Real-time monitoring**: Track token usage across sessions
-- **Seamless switching**: Click or keyboard to switch between tasks
+---
 
 ## Features
 
-- **Multi-pane layout**: 3 LLM + 3 CLI pane pairs with shared monitor
-- **Git worktree integration**: Auto-discovers worktrees for easy selection
-- **Usage monitoring**: Real-time token/cost tracking for Claude Code
-- **Live status indicators**: See which panes are working
-- **Cross-platform**: Works on macOS and Linux
-- **Extensible**: Provider architecture for multiple LLM CLIs
+| Feature | Description |
+|---------|-------------|
+| **3-Column Layout** | LLM + CLI pane pairs for each worktree |
+| **Git Worktree Integration** | Auto-discovers and lists your worktrees |
+| **Usage Monitoring** | Real-time token/cost tracking (Claude) |
+| **Status Indicators** | See "WORKING" when AI is processing |
+| **Clickable Links** | PR numbers and URLs are clickable |
+| **Cross-Platform** | macOS and Linux support |
+| **Provider Architecture** | Extensible for Claude, Gemini, etc. |
 
-## Quick Start
+---
 
-### Prerequisites
+## Requirements
 
-- tmux
-- git
-- Node.js (for usage monitoring)
-- Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
+### Required
 
-### Install
+| Dependency | Why |
+|------------|-----|
+| **tmux** | Terminal multiplexer for pane management |
+| **git** | Version control and worktree support |
+| **Node.js** | For usage monitoring (`npx ccusage`) |
+| **Claude Code** | AI coding assistant (`npm i -g @anthropic-ai/claude-code`) |
+
+### Recommended
+
+| Dependency | Why |
+|------------|-----|
+| **jq** | Better JSON parsing in scripts |
+| **gh** | GitHub CLI for PR integration |
+
+### Terminal (for full features)
+
+Clickable links and rich formatting work best in modern terminals:
+
+| Terminal | Support |
+|----------|---------|
+| **iTerm2** (macOS) | Full support - recommended |
+| **Kitty** | Full support |
+| **Windows Terminal** | Full support |
+| **VS Code Terminal** | Full support |
+| **Alacritty** | Partial (recent versions) |
+| **GNOME Terminal** | Partial (recent versions) |
+| **macOS Terminal.app** | Basic (no clickable links) |
+
+> **Note**: The workspace works in any terminal, but clickable PR links and some formatting require OSC 8 support.
+
+---
+
+## Installation
+
+### Quick Install
 
 ```bash
-# Clone and install
-git clone https://github.com/threefold/threefold-workspace.git
-cd threefold-workspace
+git clone https://github.com/threefold/threefold-workspace.git ~/.llm-workspace
+cd ~/.llm-workspace
 ./install.sh
-
-# Apply shell changes
-source ~/.zshrc  # or ~/.bashrc
-
-# Start workspace
-ws
 ```
 
-Or one-liner:
+### Then
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/threefold/threefold-workspace/main/install.sh | bash
+source ~/.zshrc    # or ~/.bashrc
+
+ws                 # Start workspace
 ```
 
-### First Run
-
-1. Run `ws-fresh` to select 3 worktrees/directories
-2. The workspace opens with Claude Code running in each top pane
-3. Bottom panes are CLI for running tests, builds, etc.
-4. Monitor pane shows real-time usage stats
+---
 
 ## Usage
 
 ### Commands
 
-| Command | Description |
-|---------|-------------|
-| `ws` | Attach to existing workspace or start new |
-| `ws-fresh` | Re-select worktrees and start fresh |
-| `workspace --help` | Show all options |
-| `workspace --list` | List available worktrees |
-| `workspace --add /path` | Add custom directory |
-| `workspace --provider gemini` | Switch LLM provider |
+```bash
+ws                      # Attach to existing or start new workspace
+ws-fresh                # Re-select worktrees and start fresh
+workspace --list        # Show available worktrees
+workspace --add ~/path  # Add custom directory
+workspace --help        # All options
+```
 
-### Keyboard Shortcuts (tmux)
+### Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+a` | tmux prefix (instead of Ctrl+b) |
-| `prefix + h/j/k/l` | Navigate panes (vim-style) |
-| `prefix + |` | Split horizontal |
-| `prefix + -` | Split vertical |
-| `prefix + g` | Open GitHub PR in browser |
-| `prefix + r` | Reload tmux config |
+| `Ctrl+a` | tmux prefix |
+| `prefix` `h` `j` `k` `l` | Navigate panes (vim-style) |
+| `prefix` `\|` | Split horizontal |
+| `prefix` `-` | Split vertical |
+| `prefix` `g` | Open GitHub PR in browser |
+| `prefix` `r` | Reload tmux config |
 | `Ctrl+Space` | Enter copy mode |
+| `Mouse` | Click to select pane, scroll, select text |
 
-### Git Worktrees
+---
 
-If you're not using git worktrees yet, here's how to get started:
+## Git Worktrees 101
+
+If you're new to git worktrees:
 
 ```bash
-# In your main repo
-git worktree add ../feature-branch feature-branch
-git worktree add ../bugfix-branch bugfix-branch
+# In your main repo, create worktrees for branches
+git worktree add ../my-project-feature feature-branch
+git worktree add ../my-project-bugfix  bugfix-branch
 
-# List worktrees
+# Now you have:
+# ~/Dev/my-project/           ← main branch
+# ~/Dev/my-project-feature/   ← feature-branch (separate directory!)
+# ~/Dev/my-project-bugfix/    ← bugfix-branch
+
+# List all worktrees
 git worktree list
 ```
 
-Now `workspace --list` will show all your worktrees.
+**Why worktrees?**
+- No more `git stash` when switching tasks
+- Each worktree has its own `node_modules`, build cache, etc.
+- Work on multiple branches truly in parallel
+
+---
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_WORKSPACE_PROVIDER` | `claude` | Default LLM provider |
-| `CLAUDE_COST_LIMIT` | `418` | Weekly cost limit ($) |
-| `CLAUDE_SESSION_COST_LIMIT` | `22` | Per-session cost limit ($) |
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+
+export LLM_WORKSPACE_PROVIDER=claude    # Default provider
+export CLAUDE_COST_LIMIT=500            # Weekly limit ($)
+export CLAUDE_SESSION_COST_LIMIT=25     # Per-session limit ($)
+```
 
 ### Config Files
 
-- `~/.config/llm-workspace/config` - Saved worktree selection
-- `~/.config/llm-workspace/provider` - Selected provider
-- `~/.config/claude-usage/config.json` - Usage limits (auto-calibrated)
+| File | Purpose |
+|------|---------|
+| `~/.config/llm-workspace/config` | Saved worktree selection |
+| `~/.config/llm-workspace/provider` | Active provider |
+| `~/.config/claude-usage/config.json` | Calibrated usage limits |
+| `~/.tmux.conf` | tmux configuration |
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
+
+---
 
 ## Claude Code Integration
 
-The workspace includes deep integration with Claude Code:
-
-### Status Line
-Shows git branch, status, and PR info directly in Claude's status line.
-
-### Pane Status
-Pane borders show "WORKING" when Claude is processing.
-
-### Usage Monitor
-Real-time tracking of:
-- Weekly usage percentage
-- Session usage percentage
-- Time remaining in current session
-- Cost burn rate
-
-### Setup in Your Project
-
-Copy the Claude settings to enable integrations:
+### Enable in Your Project
 
 ```bash
-# From your project root
+# Copy integration files to your project
 mkdir -p .claude
 cp ~/.llm-workspace/providers/claude/settings.json .claude/
 cp ~/.llm-workspace/providers/claude/pane-status.sh .claude/
 cp ~/.llm-workspace/providers/claude/statusline-command.sh .claude/
 ```
 
-## Providers
+### What You Get
 
-The workspace is designed to support multiple LLM CLI tools:
+| Feature | Description |
+|---------|-------------|
+| **Status Line** | Shows `directory git:(branch) [status] pr:#123 [CI]` |
+| **Pane Status** | Border shows "WORKING" when Claude is processing |
+| **Usage Monitor** | Bottom pane tracks weekly/session token usage |
+
+---
+
+## Providers
 
 ### Currently Supported
 
@@ -169,67 +228,76 @@ The workspace is designed to support multiple LLM CLI tools:
 
 ### Planned
 
-- **Gemini CLI** - Coming when Google releases it
-- **GitHub Copilot CLI** - Potential future support
+- **Gemini CLI** - When available
+- **GitHub Copilot CLI** - Community interest
 
 ### Adding a Provider
 
-See [docs/PROVIDERS.md](docs/PROVIDERS.md) for how to add support for new LLM CLIs.
+See [docs/PROVIDERS.md](docs/PROVIDERS.md) for the provider interface.
+
+---
 
 ## Project Structure
 
 ```
-threefold-workspace/
-├── bin/
-│   └── workspace           # Main entry point
-├── config/
-│   └── tmux.conf          # tmux configuration
+~/.llm-workspace/
+├── bin/workspace           # Main script
+├── config/tmux.conf        # tmux configuration
 ├── providers/
-│   └── claude/            # Claude Code provider
-│       ├── settings.json  # Claude Code settings
+│   └── claude/             # Claude Code integration
+│       ├── settings.json
 │       ├── usage-monitor.sh
 │       ├── usage-format.sh
 │       ├── pane-status.sh
 │       └── statusline-command.sh
 ├── docs/
-│   ├── PHILOSOPHY.md
-│   ├── CONFIGURATION.md
-│   └── PROVIDERS.md
+│   ├── PHILOSOPHY.md       # Why this workflow
+│   ├── CONFIGURATION.md    # All config options
+│   └── PROVIDERS.md        # Adding new providers
 ├── install.sh
+├── CONTRIBUTING.md
 ├── LICENSE
 └── README.md
 ```
 
+---
+
 ## Philosophy
 
-This workflow emerged from our team's experience building [Threefold](https://threefold.ai), an AI-powered workflow platform. Key principles:
+> **Context is king. Parallelism beats serialization. Visibility reduces anxiety.**
 
-1. **Context is king**: AI assistants work better with focused context
-2. **Parallel > Serial**: Work on multiple things without context-switching overhead
-3. **Visibility**: Always know your usage and status at a glance
-4. **Keyboard-first**: Everything accessible without reaching for the mouse
-5. **Extensible**: Support multiple AI tools as the ecosystem evolves
+This workflow emerged from building [Threefold](https://threefold.ai), where we manage complex citizen request workflows. The same principles apply to managing complex codebases:
 
-See [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md) for more on our development approach.
+1. **Focused context** → Better AI suggestions
+2. **Parallel execution** → Higher throughput
+3. **Real-time visibility** → Better decisions
 
-## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-Ideas for contribution:
-- Add support for new LLM providers
-- Improve usage monitoring
-- Add new tmux layouts
-- Documentation improvements
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Credits
-
-Created by the [Threefold](https://threefold.ai) team.
+Read more: [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md)
 
 ---
 
-**Found this useful?** Star the repo and share with your team!
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+**Ideas:**
+- New LLM providers
+- Additional layouts (2-pane, 4-pane)
+- Better Linux support
+- Documentation improvements
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE)
+
+---
+
+<p align="center">
+  <strong>Built by the <a href="https://threefold.ai">Threefold</a> team</strong>
+</p>
+
+<p align="center">
+  <sub>If this helps your workflow, give it a ⭐</sub>
+</p>
