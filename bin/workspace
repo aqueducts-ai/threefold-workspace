@@ -1,0 +1,716 @@
+#!/bin/bash
+#
+# LLM Workspace - Multi-pane tmux session manager for AI-assisted development
+# https://github.com/threefold/threefold-workspace
+#
+# Creates a tmux session with multiple LLM + CLI pane pairs for parallel development
+# across git worktrees or separate project directories.
+#
+# Usage:
+#   workspace                         # Use saved config or interactive selection
+#   workspace --reset                 # Re-select worktrees (ignore saved config)
+#   workspace --add /path             # Add a custom worktree path
+#   workspace -w wt1 wt2 wt3          # Manually specify 3 worktrees
+#   workspace --list                  # List available worktrees
+#   workspace --provider claude       # Specify LLM provider (default: claude)
+#   workspace --setup                 # First-time setup
+#
+
+set -e
+
+# Get the directory where this script lives
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Configuration
+SESSION_NAME="llm-workspace"
+CONFIG_DIR="$HOME/.config/llm-workspace"
+CONFIG_FILE="$CONFIG_DIR/config"
+CUSTOM_WORKTREES_FILE="$CONFIG_DIR/custom-worktrees"
+PROVIDER_CONFIG_FILE="$CONFIG_DIR/provider"
+AUTO_START_LLM=true
+
+# Default provider
+PROVIDER="${LLM_WORKSPACE_PROVIDER:-claude}"
+
+# Detect pane-base-index (0 or 1) - will be set after session creation
+PANE_BASE=""
+
+# Get pane number adjusted for base index
+pane() {
+    echo $((PANE_BASE + $1 - 1))
+}
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+BOLD='\033[1m'
+
+# Global arrays for worktree selection
+declare -a WORKTREES_ARRAY
+declare -a SELECTED_PATHS
+declare -a SELECTED_NAMES
+
+# Ensure config directory exists
+mkdir -p "$CONFIG_DIR"
+
+# Load provider configuration
+load_provider() {
+    if [ -f "$PROVIDER_CONFIG_FILE" ]; then
+        PROVIDER=$(cat "$PROVIDER_CONFIG_FILE")
+    fi
+
+    # Validate provider exists
+    if [ ! -d "$WORKSPACE_ROOT/providers/$PROVIDER" ]; then
+        echo -e "${YELLOW}Warning: Provider '$PROVIDER' not found, falling back to claude${NC}"
+        PROVIDER="claude"
+    fi
+}
+
+# Get the LLM command for the current provider
+get_llm_command() {
+    case "$PROVIDER" in
+        claude)
+            echo "claude"
+            ;;
+        gemini)
+            echo "gemini"  # Future: Gemini CLI command
+            ;;
+        *)
+            echo "claude"  # Default fallback
+            ;;
+    esac
+}
+
+# Sync provider settings to worktrees (e.g., .claude/settings.json)
+sync_provider_settings() {
+    local provider_settings="$WORKSPACE_ROOT/providers/$PROVIDER/settings.json"
+
+    if [ ! -f "$provider_settings" ]; then
+        return
+    fi
+
+    echo -e "${CYAN}Syncing $PROVIDER settings to worktrees...${NC}"
+
+    for wt_path in "${SELECTED_PATHS[@]}"; do
+        case "$PROVIDER" in
+            claude)
+                mkdir -p "$wt_path/.claude"
+                if cp "$provider_settings" "$wt_path/.claude/settings.json" 2>/dev/null; then
+                    echo -e "  ${GREEN}✓${NC} $(basename "$wt_path")"
+                fi
+                ;;
+            # Add other providers here
+        esac
+    done
+}
+
+# Start LLM in the designated panes
+# Layout: 1,3,5 = LLM panes; 2,4,6 = CLI panes; 7 = monitor
+start_llm_in_panes() {
+    local llm_cmd=$(get_llm_command)
+    echo -e "${CYAN}Starting $PROVIDER ($llm_cmd) in panes...${NC}"
+
+    # Start LLM in panes 1, 3, 5
+    tmux send-keys -t "$SESSION_NAME:1.$(pane 1)" "$llm_cmd" C-m
+    tmux send-keys -t "$SESSION_NAME:1.$(pane 3)" "$llm_cmd" C-m
+    tmux send-keys -t "$SESSION_NAME:1.$(pane 5)" "$llm_cmd" C-m
+
+    # Clear CLI panes 2, 4, 6
+    tmux send-keys -t "$SESSION_NAME:1.$(pane 2)" "clear" C-m
+    tmux send-keys -t "$SESSION_NAME:1.$(pane 4)" "clear" C-m
+    tmux send-keys -t "$SESSION_NAME:1.$(pane 6)" "clear" C-m
+}
+
+print_header() {
+    echo -e "${GREEN}"
+    echo "  ╔═══════════════════════════════════════╗"
+    echo "  ║     LLM WORKSPACE                     ║"
+    echo "  ║     ▲▲▲  Parallel AI Development      ║"
+    echo "  ╚═══════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# Setup shell aliases and PATH
+setup_shell() {
+    print_header
+    echo -e "${CYAN}Setting up shell and tmux configuration...${NC}\n"
+
+    # Detect shell config file
+    local shell_rc=""
+    if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
+        shell_rc="$HOME/.zshrc"
+    elif [ -n "$BASH_VERSION" ] || [ "$SHELL" = "/bin/bash" ]; then
+        shell_rc="$HOME/.bashrc"
+    else
+        shell_rc="$HOME/.profile"
+    fi
+
+    if [ ! -f "$shell_rc" ]; then
+        touch "$shell_rc"
+    fi
+
+    local changes_made=false
+
+    # Add workspace bin to PATH if not present
+    if ! grep -q "llm-workspace.*/bin" "$shell_rc" 2>/dev/null; then
+        echo -e "${YELLOW}Adding llm-workspace/bin to PATH...${NC}"
+        echo '' >> "$shell_rc"
+        echo "# Added by llm-workspace setup" >> "$shell_rc"
+        echo "export PATH=\"$SCRIPT_DIR:\$PATH\"" >> "$shell_rc"
+        changes_made=true
+        echo -e "  ${GREEN}✓${NC} Added $SCRIPT_DIR to PATH"
+    else
+        echo -e "  ${GREEN}✓${NC} PATH already configured"
+    fi
+
+    # Add workspace aliases if not present
+    if ! grep -q "alias llm-workspace=" "$shell_rc" 2>/dev/null && ! grep -q "alias ws=" "$shell_rc" 2>/dev/null; then
+        echo -e "${YELLOW}Adding workspace aliases...${NC}"
+        cat >> "$shell_rc" << 'ALIASES'
+
+# LLM Workspace Aliases
+alias ws='if tmux has-session -t llm-workspace 2>/dev/null; then tmux attach -t llm-workspace; else workspace; fi'
+alias ws-fresh='workspace --reset'
+alias ws-select='workspace --reset'
+ALIASES
+        changes_made=true
+        echo -e "  ${GREEN}✓${NC} Added aliases: ws, ws-fresh, ws-select"
+    else
+        echo -e "  ${GREEN}✓${NC} Aliases already configured"
+    fi
+
+    # Configure tmux
+    local tmux_conf="$HOME/.tmux.conf"
+    local our_conf="$WORKSPACE_ROOT/config/tmux.conf"
+
+    # Backup existing config
+    if [ -e "$tmux_conf" ] && [ ! -L "$tmux_conf" ]; then
+        echo -e "${YELLOW}Backing up existing ~/.tmux.conf to ~/.tmux.conf.backup${NC}"
+        cp "$tmux_conf" "$tmux_conf.backup"
+    fi
+
+    # Remove any symlink
+    if [ -L "$tmux_conf" ]; then
+        rm "$tmux_conf"
+    fi
+
+    # Copy our tmux config
+    if [ -f "$our_conf" ]; then
+        cp "$our_conf" "$tmux_conf"
+        echo -e "  ${GREEN}✓${NC} Installed tmux configuration"
+    fi
+
+    changes_made=true
+
+    # Kill existing tmux sessions for clean start
+    echo -e "${YELLOW}Killing any running tmux sessions...${NC}"
+    tmux kill-server 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} Fresh start"
+
+    # Clear old config
+    rm -f "$CONFIG_FILE" 2>/dev/null || true
+
+    echo ""
+    if [ "$changes_made" = true ]; then
+        echo -e "${GREEN}Setup complete!${NC}"
+        echo -e "${YELLOW}Run this to apply changes:${NC}"
+        echo -e "  source $shell_rc"
+        echo ""
+        echo -e "Then run:"
+    else
+        echo -e "${GREEN}Already configured!${NC}"
+        echo -e "Run:"
+    fi
+    echo -e "  ${CYAN}ws-fresh${NC}  - Select worktrees and start session"
+    echo -e "  ${CYAN}ws${NC}        - Attach to existing or start with saved config"
+}
+
+print_usage() {
+    cat << EOF
+Usage: workspace [OPTIONS]
+
+Options:
+  (no args)              Use saved config, or interactive selection if none
+  --setup                Install shell aliases and PATH (first-time setup)
+  --reset                Re-select worktrees (clears saved config)
+  --add <path>           Add a custom worktree path to discovery list
+  --remove <path>        Remove a custom worktree path
+  -w, --worktrees <w1> <w2> <w3>   Manually specify 3 worktrees
+  --provider <name>      Set LLM provider (claude, gemini)
+  --no-llm               Don't auto-start LLM in panes
+  --list                 List all available worktrees
+  --config               Show current saved configuration
+  -h, --help             Show this help
+
+Layout: 3 columns with [LLM/CLI] pairs + usage monitor at bottom
+
+Examples:
+  workspace                              # Use saved or select interactively
+  workspace --reset                      # Re-choose worktrees
+  workspace --add ~/Dev/my-project       # Add custom path
+  workspace -w main feature bugfix       # One-time manual selection
+  workspace --provider gemini            # Use Gemini CLI instead
+EOF
+}
+
+# Get git worktrees from current directory (or parent git repo)
+get_git_worktrees() {
+    # Try to find git root
+    local git_root=$(git rev-parse --show-toplevel 2>/dev/null)
+
+    if [ -z "$git_root" ]; then
+        return
+    fi
+
+    cd "$git_root" 2>/dev/null || return
+    git worktree list 2>/dev/null | while read -r line; do
+        local path=$(echo "$line" | awk '{print $1}')
+        local branch=$(echo "$line" | sed 's/.*\[\(.*\)\]/\1/')
+        local name=$(basename "$path")
+        echo "$name|$path|$branch"
+    done
+}
+
+# Get custom worktrees from config
+get_custom_worktrees() {
+    if [ -f "$CUSTOM_WORKTREES_FILE" ]; then
+        while read -r path; do
+            [ -z "$path" ] && continue
+            [ ! -d "$path" ] && continue
+            local name=$(basename "$path")
+            local branch=$(cd "$path" 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "custom")
+            echo "$name|$path|$branch"
+        done < "$CUSTOM_WORKTREES_FILE"
+    fi
+}
+
+# Get all worktrees (git + custom)
+get_all_worktrees() {
+    get_git_worktrees
+    get_custom_worktrees
+}
+
+# List worktrees with nice formatting
+list_worktrees() {
+    echo -e "${BOLD}Available Worktrees:${NC}\n"
+
+    echo -e "${CYAN}Git Worktrees:${NC}"
+    printf "  %-20s %-45s %-25s\n" "NAME" "PATH" "BRANCH"
+    printf "  %-20s %-45s %-25s\n" "----" "----" "------"
+    get_git_worktrees | while IFS='|' read -r name path branch; do
+        printf "  %-20s %-45s ${BLUE}[%s]${NC}\n" "$name" "$path" "$branch"
+    done
+
+    if [ -f "$CUSTOM_WORKTREES_FILE" ] && [ -s "$CUSTOM_WORKTREES_FILE" ]; then
+        echo ""
+        echo -e "${CYAN}Custom Worktrees:${NC}"
+        printf "  %-20s %-45s %-25s\n" "NAME" "PATH" "BRANCH"
+        printf "  %-20s %-45s %-25s\n" "----" "----" "------"
+        get_custom_worktrees | while IFS='|' read -r name path branch; do
+            printf "  %-20s %-45s ${BLUE}[%s]${NC}\n" "$name" "$path" "$branch"
+        done
+    fi
+}
+
+# Show current config
+show_config() {
+    echo -e "${BOLD}Current Configuration:${NC}\n"
+    echo -e "Provider: ${GREEN}$PROVIDER${NC}"
+    echo ""
+    if [ -f "$CONFIG_FILE" ]; then
+        echo -e "${GREEN}Saved worktrees:${NC}"
+        while read -r line; do
+            echo "  - $line"
+        done < "$CONFIG_FILE"
+    else
+        echo -e "${YELLOW}No saved configuration. Run 'workspace' to select worktrees.${NC}"
+    fi
+}
+
+# Add custom worktree
+add_custom_worktree() {
+    local input_path="$1"
+
+    # Expand path
+    local full_path
+    full_path=$(cd "$input_path" 2>/dev/null && pwd) || {
+        echo -e "${RED}Invalid path: $input_path${NC}"
+        return 1
+    }
+
+    # Check if already exists
+    if grep -qF "$full_path" "$CUSTOM_WORKTREES_FILE" 2>/dev/null; then
+        echo -e "${YELLOW}Path already in custom worktrees: $full_path${NC}"
+        return 0
+    fi
+
+    echo "$full_path" >> "$CUSTOM_WORKTREES_FILE"
+    echo -e "${GREEN}Added custom worktree: $full_path${NC}"
+}
+
+# Remove custom worktree
+remove_custom_worktree() {
+    local path="$1"
+
+    if [ ! -f "$CUSTOM_WORKTREES_FILE" ]; then
+        echo -e "${YELLOW}No custom worktrees configured${NC}"
+        return
+    fi
+
+    local temp_file=$(mktemp)
+    local found=false
+
+    while read -r line; do
+        if [ "$line" = "$path" ] || [ "$(basename "$line")" = "$path" ]; then
+            found=true
+            echo -e "${GREEN}Removed: $line${NC}"
+        else
+            echo "$line" >> "$temp_file"
+        fi
+    done < "$CUSTOM_WORKTREES_FILE"
+
+    mv "$temp_file" "$CUSTOM_WORKTREES_FILE"
+
+    if [ "$found" = false ]; then
+        echo -e "${YELLOW}Not found in custom worktrees: $path${NC}"
+    fi
+}
+
+# Save configuration
+save_config() {
+    local wt1="$1" wt2="$2" wt3="$3"
+
+    echo "$wt1" > "$CONFIG_FILE"
+    echo "$wt2" >> "$CONFIG_FILE"
+    echo "$wt3" >> "$CONFIG_FILE"
+
+    echo -e "${GREEN}Configuration saved!${NC}"
+}
+
+# Load configuration
+load_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        return 1
+    fi
+
+    local paths=()
+    while read -r line; do
+        [ -n "$line" ] && paths+=("$line")
+    done < "$CONFIG_FILE"
+
+    # Verify all paths still exist
+    for p in "${paths[@]}"; do
+        if [ ! -d "$p" ]; then
+            echo -e "${YELLOW}Saved worktree no longer exists: $p${NC}"
+            return 1
+        fi
+    done
+
+    if [ ${#paths[@]} -ge 3 ]; then
+        SELECTED_PATHS=("${paths[0]}" "${paths[1]}" "${paths[2]}")
+        SELECTED_NAMES=("$(basename "${paths[0]}")" "$(basename "${paths[1]}")" "$(basename "${paths[2]}")")
+        return 0
+    fi
+
+    return 1
+}
+
+# Interactive worktree selection
+select_worktrees_interactive() {
+    local all_worktrees
+    all_worktrees=$(get_all_worktrees)
+
+    if [ -z "$all_worktrees" ]; then
+        echo -e "${RED}No worktrees found!${NC}"
+        echo -e "${YELLOW}Tip: Run from a git repository with worktrees, or use --add to add paths${NC}"
+        exit 1
+    fi
+
+    echo -e "${CYAN}Select 3 worktrees for your workspace:${NC}\n"
+
+    # Build array and display menu
+    local i=1
+    WORKTREES_ARRAY=()
+
+    while IFS='|' read -r name path branch; do
+        [ -z "$name" ] && continue
+        printf "  ${GREEN}%d)${NC} %-18s ${BLUE}[%s]${NC}\n" "$i" "$name" "$branch"
+        printf "     ${YELLOW}%s${NC}\n" "$path"
+        WORKTREES_ARRAY+=("$name|$path|$branch")
+        ((i++))
+    done <<< "$all_worktrees"
+
+    echo ""
+    echo -e "${CYAN}Enter 3 numbers separated by spaces (e.g., '1 2 3'):${NC}"
+    echo -e "${YELLOW}Or enter 'c' to add a custom path first${NC}"
+
+    local input
+    read -r input < /dev/tty
+
+    # Handle custom path option
+    if [ "$input" = "c" ] || [ "$input" = "C" ]; then
+        echo -e "\n${CYAN}Enter custom worktree path:${NC}"
+        local custom_path
+        read -r custom_path < /dev/tty
+        add_custom_worktree "$custom_path"
+        echo ""
+        select_worktrees_interactive
+        return
+    fi
+
+    # Parse selections
+    SELECTED_PATHS=()
+    SELECTED_NAMES=()
+
+    for sel in $input; do
+        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#WORKTREES_ARRAY[@]}" ]; then
+            local idx=$((sel - 1))
+            local entry="${WORKTREES_ARRAY[$idx]}"
+            local name=$(echo "$entry" | cut -d'|' -f1)
+            local path=$(echo "$entry" | cut -d'|' -f2)
+            SELECTED_PATHS+=("$path")
+            SELECTED_NAMES+=("$name")
+        else
+            echo -e "${RED}Invalid selection: $sel${NC}"
+        fi
+    done
+
+    if [ ${#SELECTED_PATHS[@]} -lt 3 ]; then
+        echo -e "${RED}Need 3 selections. Got ${#SELECTED_PATHS[@]}.${NC}"
+        exit 1
+    fi
+}
+
+# Resolve worktree name/path to full path
+resolve_worktree_path() {
+    local input="$1"
+    local all_worktrees
+    all_worktrees=$(get_all_worktrees)
+
+    # Check if it's already a full path that exists
+    if [ -d "$input" ]; then
+        echo "$input"
+        return
+    fi
+
+    # Check by name
+    while IFS='|' read -r name path branch; do
+        if [ "$name" = "$input" ]; then
+            echo "$path"
+            return
+        fi
+    done <<< "$all_worktrees"
+
+    # Check by branch name
+    while IFS='|' read -r name path branch; do
+        if [ "$branch" = "$input" ]; then
+            echo "$path"
+            return
+        fi
+    done <<< "$all_worktrees"
+
+    echo ""
+}
+
+# Detect pane base index
+detect_pane_base() {
+    PANE_BASE=$(tmux show-options -gv pane-base-index 2>/dev/null || echo "0")
+    if [ -z "$PANE_BASE" ]; then
+        PANE_BASE=0
+    fi
+}
+
+# Create the 3-column layout with bottom monitor pane
+create_layout() {
+    local wt1="$1" wt2="$2" wt3="$3"
+
+    tmux new-session -d -s "$SESSION_NAME" -c "$wt1"
+    detect_pane_base
+
+    tmux split-window -h -t "$SESSION_NAME" -c "$wt2"
+    tmux split-window -h -t "$SESSION_NAME" -c "$wt3"
+    tmux select-layout -t "$SESSION_NAME" even-horizontal
+
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 1)"
+    tmux split-window -v -t "$SESSION_NAME" -c "$wt1" -p 30
+
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 3)"
+    tmux split-window -v -t "$SESSION_NAME" -c "$wt2" -p 30
+
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 5)"
+    tmux split-window -v -t "$SESSION_NAME" -c "$wt3" -p 30
+
+    # Add monitor pane at bottom (4 lines, full width)
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 1)"
+    tmux split-window -f -v -t "$SESSION_NAME" -c "$wt1" -l 4
+
+    # Set hook to maintain monitor pane size
+    local monitor_idx=$(pane 7)
+    tmux set-hook -t "$SESSION_NAME" client-resized "resize-pane -t $SESSION_NAME:1.$monitor_idx -y 4"
+}
+
+# Set pane titles
+set_pane_titles() {
+    local wt1_name="$1" wt2_name="$2" wt3_name="$3"
+    local provider_upper=$(echo "$PROVIDER" | tr '[:lower:]' '[:upper:]')
+
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 1)" -T "$wt1_name $provider_upper"
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 2)" -T "$wt1_name CLI"
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 3)" -T "$wt2_name $provider_upper"
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 4)" -T "$wt2_name CLI"
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 5)" -T "$wt3_name $provider_upper"
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 6)" -T "$wt3_name CLI"
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 7)" -T "MONITOR"
+}
+
+# Start monitor pane
+start_monitor() {
+    local monitor_pane=$(pane 7)
+    local monitor_script="$WORKSPACE_ROOT/providers/$PROVIDER/usage-monitor.sh"
+
+    if [ -f "$monitor_script" ]; then
+        tmux send-keys -t "$SESSION_NAME:1.$monitor_pane" "$monitor_script" Enter
+    else
+        # Fallback: just show provider info
+        tmux send-keys -t "$SESSION_NAME:1.$monitor_pane" "echo 'LLM Workspace - Provider: $PROVIDER'" Enter
+    fi
+}
+
+# Main function
+main() {
+    local manual_worktrees=()
+    local force_reset=false
+
+    # Load provider config
+    load_provider
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --setup)
+                setup_shell
+                exit 0
+                ;;
+            --reset)
+                force_reset=true
+                rm -f "$CONFIG_FILE"
+                shift
+                ;;
+            --add)
+                add_custom_worktree "$2"
+                exit 0
+                ;;
+            --remove)
+                remove_custom_worktree "$2"
+                exit 0
+                ;;
+            -w|--worktrees)
+                shift
+                while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
+                    manual_worktrees+=("$1")
+                    shift
+                done
+                ;;
+            --provider)
+                PROVIDER="$2"
+                echo "$PROVIDER" > "$PROVIDER_CONFIG_FILE"
+                shift 2
+                ;;
+            --no-llm)
+                AUTO_START_LLM=false
+                shift
+                ;;
+            --list)
+                print_header
+                list_worktrees
+                exit 0
+                ;;
+            --config)
+                print_header
+                show_config
+                exit 0
+                ;;
+            -h|--help)
+                print_usage
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                print_usage
+                exit 1
+                ;;
+        esac
+    done
+
+    print_header
+    echo -e "Provider: ${GREEN}$PROVIDER${NC}\n"
+
+    # Kill existing session if exists
+    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+        echo -e "${YELLOW}Killing existing '$SESSION_NAME' session...${NC}"
+        tmux kill-session -t "$SESSION_NAME"
+    fi
+
+    # Get worktrees
+    if [ ${#manual_worktrees[@]} -ge 3 ]; then
+        SELECTED_PATHS=()
+        SELECTED_NAMES=()
+        for wt in "${manual_worktrees[@]:0:3}"; do
+            local path=$(resolve_worktree_path "$wt")
+            if [ -z "$path" ] || [ ! -d "$path" ]; then
+                echo -e "${RED}Cannot find worktree: $wt${NC}"
+                exit 1
+            fi
+            SELECTED_PATHS+=("$path")
+            SELECTED_NAMES+=("$(basename "$path")")
+        done
+    elif load_config; then
+        echo -e "${GREEN}Using saved configuration${NC}"
+        echo -e "${YELLOW}(use --reset to re-select)${NC}\n"
+    else
+        select_worktrees_interactive
+        save_config "${SELECTED_PATHS[0]}" "${SELECTED_PATHS[1]}" "${SELECTED_PATHS[2]}"
+    fi
+
+    # Ensure we have 3 worktrees
+    if [ ${#SELECTED_PATHS[@]} -lt 3 ]; then
+        echo -e "${RED}Need 3 worktrees. Only got ${#SELECTED_PATHS[@]}.${NC}"
+        exit 1
+    fi
+
+    echo -e "\n${CYAN}Creating tmux session...${NC}"
+    echo -e "Worktrees: ${GREEN}${SELECTED_NAMES[0]}${NC}, ${GREEN}${SELECTED_NAMES[1]}${NC}, ${GREEN}${SELECTED_NAMES[2]}${NC}\n"
+
+    # Create layout
+    create_layout "${SELECTED_PATHS[0]}" "${SELECTED_PATHS[1]}" "${SELECTED_PATHS[2]}"
+
+    # Set pane titles
+    set_pane_titles "${SELECTED_NAMES[0]}" "${SELECTED_NAMES[1]}" "${SELECTED_NAMES[2]}"
+
+    # Start monitor
+    start_monitor
+
+    # Sync provider settings to worktrees
+    sync_provider_settings
+
+    # Start LLM in panes if enabled
+    if [ "$AUTO_START_LLM" = true ]; then
+        start_llm_in_panes
+    fi
+
+    # Select first LLM pane
+    tmux select-pane -t "$SESSION_NAME:1.$(pane 1)"
+
+    echo -e "${GREEN}Session '$SESSION_NAME' created!${NC}"
+    echo -e "Attaching now...\n"
+
+    # Attach to session
+    tmux attach-session -t "$SESSION_NAME"
+}
+
+main "$@"
