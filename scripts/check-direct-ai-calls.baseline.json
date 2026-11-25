@@ -1,0 +1,3 @@
+{
+  "$note": "Grandfathered direct LLM usage = the migration map. NEVER add entries or raise counts: use a per-feature AI Gateway key (.claude/rules/ai-gateway.md). `--update` only lowers counts / removes entries. disposition: migrate | keep: <reason>. $ignore: extra path regexes to skip."
+}

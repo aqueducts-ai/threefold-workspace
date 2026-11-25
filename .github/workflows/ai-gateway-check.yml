@@ -1,0 +1,28 @@
+# No new direct LLM calls: every LLM call goes through the Vercel AI Gateway with a per-feature key.
+# Rule: .claude/rules/ai-gateway.md. Scanner: scripts/check-direct-ai-calls.mjs (vendored, canonical copy in
+# aqueducts-ai/threefold). Make this job a required status check in the branch protection / org ruleset.
+name: AI Gateway check
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-direct-llm-calls:
+    name: No direct LLM calls
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Self-test the scanner (OpenAI, Anthropic, gateway fixtures)
+        run: node scripts/check-direct-ai-calls.mjs --self-test
+      - name: Check for direct LLM calls
+        run: node scripts/check-direct-ai-calls.mjs
