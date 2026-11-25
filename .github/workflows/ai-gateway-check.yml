@@ -18,11 +18,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Self-test the scanner (OpenAI, Anthropic, gateway fixtures)
         run: node scripts/check-direct-ai-calls.mjs --self-test
-      - name: Check for direct LLM calls
-        run: node scripts/check-direct-ai-calls.mjs
+      - name: Fetch the base branch's baseline (PRs only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --depth=1 origin "$BASE_REF"
+          git show FETCH_HEAD:scripts/check-direct-ai-calls.baseline.json > "$RUNNER_TEMP/base-baseline.json" 2>/dev/null || rm -f "$RUNNER_TEMP/base-baseline.json"
+      - name: Check for direct LLM calls (and that the baseline did not grow)
+        run: node scripts/check-direct-ai-calls.mjs --base "$RUNNER_TEMP/base-baseline.json"

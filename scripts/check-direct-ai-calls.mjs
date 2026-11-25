@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ai-gateway-check v1 — no new direct LLM calls. Zero dependencies (plain Node >= 18, git).
+ * ai-gateway-check v2 — no new direct LLM calls. Zero dependencies (plain Node >= 18, git).
  *
  * Canonical copy: aqueducts-ai/threefold `scripts/check-direct-ai-calls.mjs`. Every aqueducts-ai repo
  * vendors this exact file; change it there and roll the new version out to all repos together.
@@ -30,6 +30,7 @@
  *   node scripts/check-direct-ai-calls.mjs --update   # ratchet the baseline down after a migration (never adds)
  *   node scripts/check-direct-ai-calls.mjs --report   # print the migration map grouped by disposition
  *   node scripts/check-direct-ai-calls.mjs --self-test   # run the built-in OpenAI/Anthropic fixtures (CI runs it first)
+ *   node scripts/check-direct-ai-calls.mjs --base <file>  # CI on PRs: also fail if the baseline grew vs the base branch's copy
  *   node scripts/check-direct-ai-calls.mjs --init     # (re)generate the baseline; only when adopting the check
  *
  * Exit code 0 = clean, 1 = violations.
@@ -219,8 +220,33 @@ const fmt = (c) =>
     .map((s) => `${s}×${c[s]}`)
     .join(", ");
 
+/** Entries/counts/$ignore patterns present in `head` but not allowed by `base` (the base branch's baseline). */
+function baselineGrowth(base, head) {
+  const problems = [];
+  const baseIgnore = new Set(base.$ignore ?? []);
+  for (const re of head.$ignore ?? []) if (!baseIgnore.has(re)) problems.push(`$ignore pattern added: ${re}`);
+  for (const [file, e] of Object.entries(head)) {
+    if (file.startsWith("$")) continue;
+    const b = base[file];
+    if (!b) {
+      problems.push(`${file}: added to the baseline`);
+      continue;
+    }
+    for (const s of SIGNALS) {
+      if ((e.counts?.[s] ?? 0) > (b.counts?.[s] ?? 0)) problems.push(`${file}: ${s} raised from ${b.counts?.[s] ?? 0} to ${e.counts[s]}`);
+    }
+  }
+  return problems;
+}
+
+function ruleLocation() {
+  return existsSync(join(ROOT, ".claude/rules/ai-gateway.md")) ? ".claude/rules/ai-gateway.md" : "the AI Gateway section of CLAUDE.md";
+}
+
 function main() {
-  const args = new Set(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const args = new Set(argv);
+  const basePath = args.has("--base") ? argv[argv.indexOf("--base") + 1] : null;
   if (args.has("--self-test")) return selfTest();
   const { raw, entries, ignore } = loadBaseline();
   const found = new Map();
@@ -252,6 +278,9 @@ function main() {
 
   const violations = [];
   const shrunk = [];
+  if (basePath && existsSync(basePath)) {
+    for (const p of baselineGrowth(JSON.parse(readFileSync(basePath, "utf8")), raw)) violations.push(`baseline grew: ${p}`);
+  }
   for (const [file, counts] of found) {
     const base = entries[file];
     if (!base) {
@@ -290,7 +319,7 @@ function main() {
     for (const v of violations) console.error(`  - ${v}`);
     console.error(
       "\nRoute the call through the Vercel AI Gateway with a per-feature key (<FEATURE>_AI_GATEWAY_API_KEY)." +
-        "\nSee .claude/rules/ai-gateway.md. Unavoidable exception: `ai-gateway-allow: <signal>  reason: …` comment on the line before.\n"
+        `\nSee ${ruleLocation()}. Never grow the baseline to get green. Unavoidable exception: \`ai-gateway-allow: <signal>  reason: …\` comment on the line before.\n`
     );
     return 1;
   }
