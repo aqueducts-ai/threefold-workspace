@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ai-gateway-check v2 — no new direct LLM calls. Zero dependencies (plain Node >= 18, git).
+ * ai-gateway-check v3 — no new direct LLM calls. Zero dependencies (plain Node >= 18, git).
  *
  * Canonical copy: aqueducts-ai/threefold `scripts/check-direct-ai-calls.mjs`. Every aqueducts-ai repo
  * vendors this exact file; change it there and roll the new version out to all repos together.
@@ -66,9 +66,8 @@ const PATTERNS = {
 const DEFAULT_IGNORE = [
   /(^|\/)node_modules\//,
   /(^|\/)\.next\//,
-  /(^|\/)(dist|build|out|coverage)\//,
+  /^(dist|build|out|coverage|vendor)\//,
   /(^|\/)\.?venv\//,
-  /(^|\/)vendor\//,
   /^docs\//,
   /^\.github\//,
   /^\.claude\//,

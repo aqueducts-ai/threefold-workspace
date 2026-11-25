@@ -33,7 +33,8 @@ when a file outside the baseline has a direct-call signal, or a baselined file g
 - **Baseline = migration map:** `scripts/check-direct-ai-calls.baseline.json` lists every legacy file,
   its signal counts and a `disposition`. `node scripts/check-direct-ai-calls.mjs --report` prints it.
 - **Never add entries, raise counts or add `$ignore` patterns** to get green. Migrate the call instead.
-  On PRs, CI compares the baseline with the base branch and fails if it grew.
+  On PRs, CI compares the baseline with the base branch and fails if it grew, and also runs the
+  base branch's scanner, so editing the scanner in a PR does not weaken the check.
 - After migrating a file: `node scripts/check-direct-ai-calls.mjs --update` (only lowers/removes) and
   commit the baseline with the migration.
 - Rare, reviewed exception: `ai-gateway-allow: <signal>  reason: <why>` in a comment on the line
