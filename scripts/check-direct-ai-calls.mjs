@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ai-gateway-check v3 — no new direct LLM calls. Zero dependencies (plain Node >= 18, git).
+ * ai-gateway-check v4 — no new direct LLM calls. Zero dependencies (plain Node >= 18, git).
  *
  * Canonical copy: aqueducts-ai/threefold `scripts/check-direct-ai-calls.mjs`. Every aqueducts-ai repo
  * vendors this exact file; change it there and roll the new version out to all repos together.
@@ -196,11 +196,25 @@ function selfTest() {
     const want = [...expected].sort();
     if (got.join(",") !== want.join(",")) failures.push(`${name}: expected [${want}] got [${got}]`);
   }
+  const base = { "a.ts": { counts: { "provider-sdk": 1 } } };
+  const growthCases = [
+    ["unchanged baseline", base, 0],
+    ["entry added", { ...base, "b.ts": { counts: { "provider-key": 1 } } }, 1],
+    ["count raised", { "a.ts": { counts: { "provider-sdk": 2 } } }, 1],
+    ["new signal on entry", { "a.ts": { counts: { "provider-sdk": 1, "provider-host": 1 } } }, 1],
+    ["$ignore added", { ...base, $ignore: ["^src/"] }, 1],
+    ["entry removed (allowed)", {}, 0],
+    ["count lowered (allowed)", { "a.ts": { counts: {} } }, 0],
+  ];
+  for (const [name, head, want] of growthCases) {
+    const got = baselineGrowth(base, head).length;
+    if (got !== want) failures.push(`baseline growth "${name}": expected ${want} problem(s), got ${got}`);
+  }
   if (failures.length) {
     console.error(`❌ Scanner self-test failed:\n  ${failures.join("\n  ")}`);
     return 1;
   }
-  console.log(`✓ Scanner self-test passed (${FIXTURES.length} OpenAI / Anthropic / gateway cases).`);
+  console.log(`✓ Scanner self-test passed (${FIXTURES.length} OpenAI / Anthropic / gateway cases, ${growthCases.length} baseline-growth cases).`);
   return 0;
 }
 
@@ -245,7 +259,13 @@ function ruleLocation() {
 function main() {
   const argv = process.argv.slice(2);
   const args = new Set(argv);
+  const KNOWN = new Set(["--self-test", "--init", "--report", "--update", "--base"]);
   const basePath = args.has("--base") ? argv[argv.indexOf("--base") + 1] : null;
+  const unknown = argv.filter((a, i) => !KNOWN.has(a) && !(argv[i - 1] === "--base"));
+  if (unknown.length || (args.has("--base") && !basePath)) {
+    console.error(`Unknown or incomplete arguments: ${unknown.join(" ") || "--base needs a file"}`);
+    return 2;
+  }
   if (args.has("--self-test")) return selfTest();
   const { raw, entries, ignore } = loadBaseline();
   const found = new Map();
