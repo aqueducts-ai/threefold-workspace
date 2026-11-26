@@ -1,0 +1,55 @@
+# No new direct LLM calls: every LLM call goes through the Vercel AI Gateway with a per-feature key.
+# Rule: .claude/rules/ai-gateway.md. Scanner: scripts/check-direct-ai-calls.mjs (vendored, canonical copy in
+# aqueducts-ai/threefold). Make this job a required status check in the branch protection / org ruleset.
+name: AI Gateway check
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-direct-llm-calls:
+    name: No direct LLM calls
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Self-test this branch's scanner (OpenAI, Anthropic, gateway, baseline-growth fixtures)
+        run: node scripts/check-direct-ai-calls.mjs --self-test
+      # On PRs the BASE branch's scanner and baseline are the reference, so a PR can't weaken the check
+      # by editing the scanner or growing the baseline. On first adoption the base has neither, and this
+      # branch's copies are used. A failed fetch fails the job (no silent skip).
+      - name: Fetch the base branch's scanner and baseline (PRs only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --depth=1 origin "$BASE_REF"
+          if git cat-file -e FETCH_HEAD:scripts/check-direct-ai-calls.mjs 2>/dev/null; then
+            git show FETCH_HEAD:scripts/check-direct-ai-calls.mjs > "$RUNNER_TEMP/base-scanner.mjs"
+          fi
+          if git cat-file -e FETCH_HEAD:scripts/check-direct-ai-calls.baseline.json 2>/dev/null; then
+            git show FETCH_HEAD:scripts/check-direct-ai-calls.baseline.json > "$RUNNER_TEMP/base-baseline.json"
+          fi
+      - name: Check for direct LLM calls (and that the baseline did not grow)
+        run: |
+          SCANNER=scripts/check-direct-ai-calls.mjs
+          if [ -f "$RUNNER_TEMP/base-scanner.mjs" ]; then
+            SCANNER="$RUNNER_TEMP/base-scanner.mjs"
+            echo "Using the base branch's scanner."
+            node "$SCANNER" --self-test
+          fi
+          if [ -f "$RUNNER_TEMP/base-baseline.json" ]; then
+            node "$SCANNER" --base "$RUNNER_TEMP/base-baseline.json"
+          else
+            echo "No baseline on the base branch (first adoption): checking against this branch's baseline."
+            node "$SCANNER"
+          fi
