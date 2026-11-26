@@ -15,10 +15,17 @@ every aqueducts-ai repo.
 
 ## Always
 
-- One key per feature: `<FEATURE>_AI_GATEWAY_API_KEY` (e.g. `LOOP_REVIEW_AI_GATEWAY_API_KEY`,
-  `VOICE_EVALS_AI_GATEWAY_API_KEY`, `CALL_TRANSCRIBE_AI_GATEWAY_API_KEY`). A new feature gets a new
-  key; never reuse another feature's. Ask the user to create it (Vercel → AI Gateway → API keys) and
-  provision it; never invent or paste a key.
+- One key per feature, named `<FEATURE>_AI_GATEWAY_API_KEY` in SCREAMING_SNAKE_CASE (e.g.
+  `LOOP_REVIEW_AI_GATEWAY_API_KEY`, `VOICE_EVALS_AI_GATEWAY_API_KEY`, `CALL_TRANSCRIBE_AI_GATEWAY_API_KEY`).
+  `<FEATURE>` is the product feature that spends, so the gateway dashboard shows what spent the money:
+  never a provider or model (`OPENAI_…`, `CLAUDE_…`: the model can change, the key stays) and never a
+  catch-all (`AI_`, `LLM_`, `SHARED_`, `DEFAULT_`, `COMMON_`). A new feature gets a new key; never reuse
+  another feature's, and never invent or paste a key.
+- Provisioning (AI Gateway key with a budget, Vercel env var, Google Secret Manager) has one source of
+  truth: the `ai-gateway-key` skill in `aqueducts-ai/threefold`. Its script
+  `scripts/secret-rotation/create-ai-gateway-key.mjs` does all of it without anyone seeing the value; ask
+  the user to run it (or follow the skill's manual steps). Never create a key with a tool that returns the
+  secret into the conversation.
 - TypeScript: `createGateway({ apiKey: process.env.<FEATURE>_AI_GATEWAY_API_KEY })` from `ai`, with
   gateway model ids (`anthropic/claude-sonnet-5.5`, `openai/gpt-6-luna`).
 - Python / OpenAI-compatible clients: the OpenAI SDK with `base_url="https://ai-gateway.vercel.sh/v1"`
